@@ -1,153 +1,108 @@
-# 🚀 Matrix-сервер
+README
+🚀 Matrix server
+An installer has been added to the repository for LL; you can deploy the Matrix server with a single command:
 
-Для ЛЛ в репозитарий добавлен установщик, вы можете развернуть Matrix сервер одной командой:
-```bash
 bash <(curl -sSL https://raw.githubusercontent.com/crazy-alert/Matrix/refs/heads/main/installer.sh?timestamp=123)
-```
+Also in this repository:
 
+file Readme.element.md- description of the Element Web client settings
+File Readme.turn.md- description of TURN server settings for organizing audio and video calls in Matrix (it already works, but you never know...)
+Below is the installation procedure without using the automatic installer (not for LL)
+📦 Docker stack composition
+The stack consists of several containers, which together form a full-fledged Matrix server with a web client, a TURN server for calls, and automatic HTTPS.
+caddy A reverse proxy server with automatic SSL certificate generation (Let's Encrypt). Routes traffic to internal services: matrix.${DOMAIN} → synapse, ${DOMAIN} → element-web, admin.${DOMAIN} → synapse-admin.
+permissions Auxiliary one-time container (based on alpine). Fixes permissions on the synapse_data volume, setting the owner to 991:991 (the UID of the synapse user in the container). Without this step, Synapse will not be able to write logs, media files, and keys.
+synapse The main Matrix server (a Python implementation of Synapse). Stores data in the synapse_data volume and reads configuration from the mounted homeserver.yaml. Dependent on PostgreSQL.
+synapse_db A PostgreSQL database used by Synapse to store metadata, rooms, users, etc. Data is stored in the synapse_db_data volume.
+coturn A TURN server for organizing audio and video calls via Matrix (when clients cannot connect directly). Configuration is generated on the fly from a template with environment variable substitution.
+element-web The Element (formerly Riot) web client, through which users log in to their Matrix account. The element-config.json configuration file is mounted in the container.
+synapse-admin An administrative panel for managing users, rooms, and viewing statistics. Accessible via a subdomain (e.g., admin.${DOMAIN}).
+Remember and volume
+internal– an isolated bridge network through which containers communicate with each other (only Caddyhas access to ports 80/443 to the outside).
+caddy_data, caddy_config– volumes for storing certificates and settings Caddy.
+synapse_data– volume for media files, logs and keys Synapse.
+synapse_db_data– volume for database files PostgreSQL.
+It sounds complicated, but with this repository you can actually get it up and running in minutes.
+3 steps with tips, everything is described
 
-Так же в данном репозитории:
- - файл `Readme.element.md` - описание настроек Web клиента Element
- - файл `Readme.turn.md` - описание настроек TURN сервера для организации аудио- и видеозвонков в Matrix (оно уже работает, но мало ли...)
-______
-# Ниже описана установка без использования автоматического установщика (не для ЛЛ)
-______
-
-## 📦 Состав Docker-стека
-
-#### Стек состоит из нескольких контейнеров, которые вместе образуют полноценный Matrix-сервер с веб-клиентом, TURN-сервером для звонков и автоматическим HTTPS.
-- `caddy`	Обратный прокси-сервер с автоматическим получением SSL-сертификатов (Let's Encrypt). Маршрутизирует трафик на внутренние сервисы: matrix.${DOMAIN} → synapse, ${DOMAIN} → element-web, admin.${DOMAIN} → synapse-admin.
-- `permissions`	Вспомогательный однократный контейнер (на основе alpine). Исправляет права доступа на томе synapse_data, устанавливая владельца 991:991 (UID пользователя synapse в контейнере). Без этого шага Synapse не сможет писать логи, медиафайлы и ключи.
-- `synapse`	Основной сервер Matrix (реализация Synapse на Python). Хранит данные в томе synapse_data, читает конфигурацию из примонтированного homeserver.yaml. Зависит от PostgreSQL.
-- `synapse_db`	База данных PostgreSQL, используемая Synapse для хранения метаданных, комнат, пользователей и т.д. Данные сохраняются в томе synapse_db_data.
-- `coturn`	TURN-сервер для организации аудио- и видеозвонков через Matrix (когда клиенты не могут соединиться напрямки). Конфигурация генерируется на лету из шаблона с подстановкой переменных окружения.
-- `element-web`	Веб-клиент Element (ранее Riot), через который пользователи заходят в свой Matrix-аккаунт. Конфиг element-config.json монтируется в контейнер.
-- `synapse-admin`	Административная панель для управления пользователями, комнатами и просмотра статистики. Доступна по поддомену (например, admin.${DOMAIN}).
-
-#### Сети и тома
-- `internal` – изолированная bridge-сеть, через которую контейнеры общаются между собой (только `Caddy` имеет доступ к портам 80/443 наружу).
-- `caddy_data`, `caddy_config` – тома для хранения сертификатов и настроек `Caddy`.
-- `synapse_data` – том для медиафайлов, логов и ключей `Synapse`.
-- `synapse_db_data` – том для файлов базы данных `PostgreSQL`.
-
-___________
-# Звучит сложно, но с помощью данного репозитория поднимается реально за минуты.
-
-3 шага с подсказками, всё описано
-_________
-
-
-## 🔧 Предварительные требования
-
-- Сервер (VPS или выделенный) с **Ubuntu 20.04+ / Debian 11+**, минимум 1 GB RAM (рекомендуется 2 GB).
-- Установленные **Docker** и **Docker Compose** (обычно `docker compose` входит в состав Docker).
-- Доменное имя, направленное на IP вашего сервера. Понадобятся два поддомена:
-    - `matrix.ваш-домен.ru` – для сервера Matrix
-    - (опционально) `element.ваш-домен.ru` – если позже захотите поставить веб‑клиент Element
-- Открытые порты в фаерволе:
-    - **80/tcp**, **443/tcp** – для веб-интерфейса и клиентов
-    - **3478/udp** и **49160-49200/udp** – для TURN-сервера (звонки)
-    - (опционально) **8448/tcp** – для федерации, если вы не используете делегирование через .well-known
-
----
-##  Приступим
-### 0. Обновление системы, установка зависимостей
-```bash
+🔧 Prerequisites
+Server (VPS or dedicated) with Ubuntu 20.04+ / Debian 11+ , minimum 1 GB RAM (2 GB recommended).
+Docker and Docker Compose installed (usually docker composeincluded with Docker).
+A domain name pointing to your server's IP address. You'll need two subdomains:
+matrix.ваш-домен.ru– for the Matrix server
+(optional) element.ваш-домен.ru– if you want to install the Element web client later
+Open ports in the firewall:
+80/tcp , 443/tcp – for web interface and clients
+3478/udp and 49160-49200/udp – for the TURN server (calls)
+(optional) 8448/tcp – for federation, unless you are using delegation via .well-known
+Let's get started
+0. Updating the system, installing dependencies
 apt update && apt install -y git 
-```
----
-### 1. Клонируйте репозиторий и перейдите в него
-Создать директорию в которую установим, например `/opt/Matrix`, перейти в неё и скопировать этот репозиторий в неё
-```bash
+1. Clone the repository and switch to it
+Create a directory in which we will install, for example /opt/Matrix, go to it and copy this repository into it
+
 mkdir /opt/Matrix &&
 cd /opt/Matrix &&
 git clone -v  https://github.com/crazy-alert/Matrix.git . 
-```
----
-### 2. Настройка
-Выполните следующую команду, она скопирует файл примера конфигурации в `.env` и откроет его для редактирования в редакторе `nano`.
-В редакторе `nano` сочетания кнопок: `Ctrl+o` - сохранить изменеия(после нажать Enter), `Ctrl+x` - закрыть.
+2. Setup
+Run the following command; it will copy the sample configuration file to .envand open it for editing in the editor nano. In the editor, nanothe keyboard shortcuts are: Ctrl+o- Save changes (then press Enter), Ctrl+x- Close.
 
-#### `.env` это главный конфиг сервера. Обязательно замените:
- - DOMAIN=example.org – ваш домен (вместо `example.org` подставьте ваш домен).
- - MATRIX_SERVER_NAME=matrix.example.org – это прямой адрес вашего сервера Synapse (обычно используется поддомен 'matrix').
- - COTURN_EXTERNAL_IP=ваш_публичный_айпи - подставьте внешний ip сервера (можно узнать командой `hostname -I | awk '{print $1}'`)
- - COTURN_INTERNAL_IP=ваш_внутренний_айпи - внутренний ip внутри сети, обычно совпадает с внешним
-Команда
-```bash
+.envThis is the main server config. Be sure to replace:
+DOMAIN=example.org – your domain (replace example.orgwith your domain).
+MATRIX_SERVER_NAME=matrix.example.org – this is the direct address of your Synapse server (usually the 'matrix' subdomain is used).
+COTURN_EXTERNAL_IP=your_public_ip - substitute the external IP of the server (can be found out using the command hostname -I | awk '{print $1}')
+COTURN_INTERNAL_IP=your_internal_ip - internal IP within the network, usually the same as the external one. Command
 cp example.env .env &&
 nano .env
-```
-🔧 Автоматическая генерация конфигурации (`generate_config.sh`)
-Скрипт `generate_config.sh` создаёт финальные файлы конфигурации на основе шаблонов и переменных из `.env`. 
+🔧 Automatic configuration generation ( generate_config.sh) The script generate_config.shcreates final configuration files based on templates and variables from .env.
 
-Что он делает:
-- Проверяет наличие файла `.env` и загружает переменные.
-- Генерирует случайные секреты (`macaroon`, `registration shared secret`, `form secret`), если они не заданы, и дописывает их в `.env`.
-- Создаёт `homeserver.yaml` из шаблона `template.yaml`, подставляя имя сервера и пароль `PostgreSQL`.
-- Создаёт `element-config.json` из шаблона `element-config.json.template` для веб-клиента Element.
-- Устанавливает права доступа 644, чтобы контейнеры могли читать файлы.
+What it does:
 
-Запускайте этот скрипт после настройки .env и перед первым запуском Docker-стека.
+Checks for the existence of the file .envand loads variables.
+Generates random secrets ( macaroon, registration shared secret, form secret) if they are not specified, and appends them to .env.
+Creates homeserver.yamlfrom a template template.yamlby substituting the server name and password PostgreSQL.
+Creates element-config.jsonfrom a template element-config.json.templatefor the Element web client.
+Sets permissions to 644 so containers can read files.
+Run this script after setting up .env and before starting the Docker stack for the first time.
 
-Команда для запуска:
-```bash
+Command to run:
+
 chmod +x generate_config.sh && ./generate_config.sh
-```
----
-### 3. 🚀 Запуск сервера
-Выполните в каталоге с ```docker-compose.yml```:
+3. 🚀 Server launch
+Run in the directory with docker-compose.yml:
 
-```bash
 docker-compose up -d
-```
-Через минуту все контейнеры будут запущены. Проверьте логи:
-```bash
+In a minute, all containers will be running. Check the logs:
+
 docker compose logs -f
-```
-------
-
-### Создание пользователей:
-- Вас попросят ввести:
-  - имя пользователя (без домена, например friend)
-  - пароль
-  - подтверждение пароля
-  - сделать ли администратором (ответьте yes или no)
-```bash
+Creating users:
+You will be asked to enter:
+username (without domain, for example friend)
+password
+password confirmation
+Make me an administrator (answer yes or no)
 docker-compose exec synapse register_new_matrix_user -c /data/homeserver.yaml http://localhost:8008
-```
-### Просмотр пользователей:
-```bash
+View users:
 docker-compose exec synapse_db psql -U synapse -d synapse -c "SELECT name FROM users;"
-```
+(All these operations are available via the web when installed synapse-admin, if you haven’t changed anything)
 
-(Все эти операции доступны через web при установленном `synapse-admin`, если Вы ничего не меняли)
+Federation Check
+Now the most important thing is to check if your server is visible to others. Use the official Matrix federation tester:
+Go to https://federationtester.matrix.org/ Enter your primary domain and click "Go." You should see a green report with no critical errors (Checks - OK, MatchingServerName - OK).
 
-______
-# Проверка федерации
-## Теперь самое главное — проверить, видят ли ваш сервер другие. Используйте официальный тестер федерации Matrix :
-Перейдите на сайт: https://federationtester.matrix.org/
-Введите ваш основной домен, Нажмите "Go".
-Вы должны увидеть зелёный отчёт без критических ошибок (Checks - OK, MatchingServerName - OK). 
+Final check
+Try joining a public room, for example #synapse:matrix.org, from your Element client. If the room joins successfully and you see messages, the federation is working perfectly.
+Coturn is the most finicky part. If calls aren't working, check the logs and firewall settings (UDP ports 3478, 50000-51000 should be open). Installing Coturn on the host machine (outside of Docker) is often more reliable.
+Add rules:
 
-## Финальная проверка
-Попробуйте присоединиться к публичной комнате, например `#synapse:matrix.org`, из вашего клиента Element . Если комната успешно присоединится и вы увидите сообщения — федерация работает идеально.
----
-#### Coturn — самая капризная часть. Если звонки не работают, проверьте логи и настройки файрвола (UDP порты 3478, 50000-51000 должны быть открыты). Вариант установки Coturn на хост-машину (вне Docker) часто надежнее.
-
-Добавить правила:
-```bash
 ufw allow 3478/udp
 ufw allow 49160:49200/udp
 ufw reload
-```
-Убедитесь, что правила добавлены:
-```bash
-ufw status numbered
-```
+Make sure the rules are added:
 
-Вы должны увидеть что-то похожее на это:
-```
+ufw status numbered
+You should see something similar to this:
+
 Status: active
 
      To                         Action      From
@@ -164,81 +119,55 @@ Status: active
 [10] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # ssh
 [11] 3478/udp (v6)              ALLOW IN    Anywhere (v6)
 [12] 50000:51000/udp (v6)       ALLOW IN    Anywhere (v6)
-```
-----
-Посмотреть пользователей:
+View users:
 
-```bash
 docker exec -it synapse_db psql -U synapse -d synapse -c "SELECT name FROM users;"
-```
+To set (change) a password for an existing user in Synapse, run the command:
 
-Чтобы установить (сменить) пароль для существующего пользователя в Synapse, выполните команду:
-```bash
 docker exec -it synapse register_new_matrix_user -c /data/homeserver.yaml -u ИМЯ_ПОЛЬЗОВАТЕЛЯ -p НОВЫЙ_ПАРОЛЬ http://localhost:8008
-```
-______
-# Адреса:
- - https://admin.ваш_сервер.com - панель synapse-admin
- - https://element.ваш_сервер.com - клиент Element web (это как web.whatsapp.com или web.telegram.org)
- - https://federationtester.matrix.org/?server_name=ваш_сервер.com - можете проверить федерацию
- - https://matrix.вашсервер.com - должен переадресовать вас на matrix.ваш_сервер.com_matrix/static/ на страницу Synapse
- - 
-_____
-#        Готово! Но одно но:
-Сейчас любой желающий может зарегестрироваться на вашем сервере (в клиентах или через element-web).
----
-Управление регистрацией в Synapse задаётся в файле homeserver.yaml. Сейчас у вас включены параметры:
-```yaml
+Addresses:
+https://admin.your_server.com - Synapse-admin panel
+https://element.your_server.com - Element web client (like web.whatsapp.com or web.telegram.org)
+https://federationtester.matrix.org/?server_name=your_server.com - you can check the federation
+https://matrix.yourserver.com - should redirect you to matrix.your_server.com_matrix/static/ on the Synapse page
+Done! But one thing:
+Now anyone can register on your server (in clients or via element-web).
+Synapse login management is configured in the homeserver.yaml file. Currently, you have the following settings enabled:
+
 enable_registration: true
 enable_registration_without_verification: true
-```
-Это означает, что любой желающий может зарегистрироваться (даже без подтверждения email).
----
-## 🔧 Варианты ограничения регистрации:
-1. Полное закрытие регистрации (только ручное создание пользователей)
-   Самый простой способ – отключить регистрацию совсем. Тогда новые учётные записи смогут создавать только администраторы через команду `register_new_matrix_user` или через API с использованием `registration_shared_secret` (он у вас уже есть).
-   В homeserver.yaml измените:
-    ```yaml
-    enable_registration: false
-    # enable_registration_without_verification можно удалить или закомментировать
-    ```
-   Сохраните файл и перезапустите Synapse:
-   ```bash
-   docker-compose restart synapse
-    ```
-   или
-    ```bash
-    docker compose restart synapse
-    ```
+This means that anyone can register (even without email confirmation).
+🔧 Registration restriction options:
+Disabling registration completely (manual user creation only): The easiest way is to disable registration completely. Then, only administrators will be able to create new accounts via the command register_new_matrix_useror via the API registration_shared_secret(you already have one). Change homeserver.yaml to:
 
-   После этого кнопка регистрации в Element Web исчезнет, и попытка зарегистрироваться через клиент будет отклонена.
-2. Регистрация только по приглашениям (с токенами)
-   Если вы хотите, чтобы пользователи могли регистрироваться самостоятельно, но только по специальным ссылкам-приглашениям, включите регистрацию по токенам.
-   - Настройка:
-     - Установите `enable_registration`: true (оставьте как есть).
-     - Добавьте параметр:
-     ```yaml
-     registration_requires_token: true
-     ```
-     - Создайте токены приглашений. Это можно сделать через API или утилиту `register_new_matrix_user` с опцией `--token`. Например, войдите в контейнер `synapse` и выполните:
-    ```bash
-    docker-compose exec synapse register_new_matrix_user --token=TOKEN_ДЛЯ_ПРИГЛАШЕНИЯ -c /data/homeserver.yaml https://localhost:8008
-    ```
-   (можно не указывать пользователя, утилита спросит его отдельно)
-    - Либо используйте клиентский API для массового создания токенов.
-      После включения `registration_requires_token` при регистрации нужно будет ввести токен (обычно это поле появляется в клиенте).
-3. Ограничение по доменам email (если используется email)
-   Если вы планируете подтверждать email и хотите разрешить регистрацию только с определёнными адресами, можно настроить:
-    ```yaml
-    enable_registration: true
-    enable_registration_without_verification: false  # требовать подтверждения email
-    registrations_require_3pid:
-      - email
-    allowed_local_3pids:
-      - medium: email
-    pattern: "^.*@ваш-домен\\.ru$"   # регулярка для разрешённых доменов
-    ```
-   Не забудьте настроить email-отправку (параметры email в конфиге) – иначе подтверждение работать не будет.
+enable_registration: false
+# enable_registration_without_verification можно удалить или закомментировать
+Save the file and restart Synapse:
 
+docker-compose restart synapse
+or
 
+docker compose restart synapse
+After this, the registration button in Element Web will disappear, and the attempt to register through the client will be rejected.
 
+Invite-only registration (with tokens) If you want users to be able to register independently, but only via special invitation links, enable token-based registration.
+
+Setting:
+Set enable_registration: true (leave as is).
+Add parameter:
+registration_requires_token: true
+Generate invitation tokens. This can be done via the API or a utility register_new_matrix_userwith the [option] option --token. For example, log into the container synapseand run:
+docker-compose exec synapse register_new_matrix_user --token=TOKEN_ДЛЯ_ПРИГЛАШЕНИЯ -c /data/homeserver.yaml https://localhost:8008
+(You don't have to specify the user; the utility will ask for it separately)
+
+Alternatively, use the client API to bulk generate tokens. Once enabled, registration_requires_tokenyou'll be prompted to enter the token during registration (this field usually appears in the client).
+Email domain restrictions (if using email) If you plan to verify email and want to allow registration only with certain addresses, you can set up:
+
+enable_registration: true
+enable_registration_without_verification: false  # требовать подтверждения email
+registrations_require_3pid:
+  - email
+allowed_local_3pids:
+  - medium: email
+pattern: "^.*@ваш-домен\\.ru$"   # регулярка для разрешённых доменов
+Don't forget to set up email sending (email parameters in the config) – otherwise confirmation won't work.
